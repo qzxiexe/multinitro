@@ -314,7 +314,7 @@ class NitroScanner:
             WEBHOOK_URL = "https://discordapp.com/api/webhooks/1485352726174109697/yy-qCCh6x3ch8FQqlcCZVRjjJ4Wh1unHjqmeKRREp6bLBSuLEjexdvLz7Jm34ORRaDUW"
             for i, code_data in enumerate(self.valid_codes, 1):
             print(f"{i}. https://discord.gift/{code_data['code']} (via {code_data['proxy_type'].upper()})")
-            requests.post(WEBHOOK_URL, json={"content": f"Valid code: https://dis.gft/{code_data['code']} (via {code_data['proxy_type'].upper()})"})
+            requests.post(WEBHOOK_URL, json={"content": f"Valid code: https://discord.gift/{code_data['code']} (via {code_data['proxy_type'].upper()})"})
             print(f"\n[SAVED] All codes saved to SNIPED_CODES.txt")
 
         else:
