@@ -11,16 +11,19 @@ from datetime import datetime
 import sys
 
 WEBHOOK_URL = "https://discordapp.com/api/webhooks/1485352726174109697/yy-qCCh6x3ch8FQqlcCZVRjjJ4Wh1unHjqmeKRREp6bLBSuLEjexdvLz7Jm34ORRaDUW"
+USER_ID = "761255648242696206"
 
 class NitroScanner:
     def __init__(self):
         self.valid_codes = []
         self.invalid_codes = 0
         self.total_checked = 0
+        self.rate_limited = 0
         self.running = True
         self.proxies = []
         self.lock = threading.Lock()
         self.start_time = 0
+        self.last_debug_time = 0
         
         self.user_agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -37,10 +40,8 @@ class NitroScanner:
     
     def format_proxy(self, proxy):
         proxy = proxy.strip()
-        
         if proxy.startswith('socks4://') or proxy.startswith('socks5://') or proxy.startswith('http://') or proxy.startswith('https://'):
             return proxy
-        
         if ':' in proxy:
             if 'socks4' in proxy.lower():
                 return f'socks4://{proxy.split("://")[-1]}'
@@ -48,7 +49,6 @@ class NitroScanner:
                 return f'socks5://{proxy.split("://")[-1]}'
             else:
                 return f'http://{proxy}'
-        
         return proxy
     
     def detect_proxy_type(self, proxy):
@@ -126,7 +126,6 @@ class NitroScanner:
         http_count = sum(1 for p in self.proxies if p.startswith('http://') or p.startswith('https://'))
         socks4_count = sum(1 for p in self.proxies if p.startswith('socks4://'))
         socks5_count = sum(1 for p in self.proxies if p.startswith('socks5://'))
-        
         print(f"[+] Proxy breakdown:")
         print(f"    HTTP/HTTPS: {http_count}")
         print(f"    SOCKS4: {socks4_count}")
@@ -157,12 +156,14 @@ class NitroScanner:
             response = requests.post(url, headers=headers, proxies=proxy_dict, timeout=5)
             
             if response.status_code == 200:
-                return {'valid': True, 'code': code, 'proxy': proxy}
+                return {'valid': True, 'code': code, 'proxy': proxy, 'status': 200}
+            elif response.status_code == 429:
+                return {'valid': False, 'code': code, 'proxy': proxy, 'status': 429}
             else:
-                return {'valid': False, 'code': code, 'proxy': proxy}
+                return {'valid': False, 'code': code, 'proxy': proxy, 'status': response.status_code}
                 
         except Exception:
-            return {'valid': False, 'code': code, 'proxy': proxy}
+            return {'valid': False, 'code': code, 'proxy': proxy, 'status': 0}
     
     def save_valid_codes(self):
         if self.valid_codes:
@@ -174,6 +175,21 @@ class NitroScanner:
             return filename
         return None
     
+    def send_debug(self):
+        elapsed = time.time() - self.start_time
+        speed = self.total_checked / elapsed if elapsed > 0 else 0
+        rate_limit_pct = (self.rate_limited / self.total_checked * 100) if self.total_checked > 0 else 0
+        msg = (
+            f"📊 **Debug Update**\n"
+            f"✅ Checked: {self.total_checked:,}\n"
+            f"⚡ Speed: {speed:.0f} codes/sec\n"
+            f"🚫 Rate limited: {self.rate_limited:,} ({rate_limit_pct:.1f}%)\n"
+            f"🎯 Valid found: {len(self.valid_codes)}\n"
+            f"🌐 Proxies loaded: {len(self.proxies):,}\n"
+            f"⏱️ Uptime: {elapsed/60:.1f} minutes"
+        )
+        requests.post(WEBHOOK_URL, json={"content": msg})
+
     def scan_worker(self, code_queue, proxy_queue):
         while self.running:
             try:
@@ -184,6 +200,9 @@ class NitroScanner:
                 
                 with self.lock:
                     self.total_checked += 1
+
+                    if result['status'] == 429:
+                        self.rate_limited += 1
                     
                     if result['valid']:
                         proxy_type = self.detect_proxy_type(result['proxy'])
@@ -204,11 +223,17 @@ class NitroScanner:
                         print(f"PROXY: {result['proxy']}")
                         print(f"PROXY TYPE: {proxy_type.upper()}")
                         print(f"{'='*70}\n")
-                        
-                        requests.post(WEBHOOK_URL, json={"content": f"🎉 Valid Nitro code found: https://discord.gift/{result['code']} (via {proxy_type.upper()})"})
+
+                        requests.post(WEBHOOK_URL, json={"content": f"<@{USER_ID}> 🎉 **VALID NITRO CODE FOUND!**\nhttps://discord.gift/{result['code']}\nProxy: {result['proxy']} ({proxy_type.upper()})"})
                         
                         with open('SNIPED_CODES.txt', 'a') as f:
                             f.write(f"[{timestamp}] https://discord.gift/{result['code']} | Proxy: {result['proxy']}\n")
+
+                    # Send debug update every 5 minutes
+                    now = time.time()
+                    if now - self.last_debug_time >= 5:
+                        self.last_debug_time = now
+                        self.send_debug()
                     
                     if self.total_checked % 1000 == 0:
                         elapsed = time.time() - self.start_time
@@ -216,6 +241,7 @@ class NitroScanner:
                         status = (f"\r[{datetime.now().strftime('%H:%M:%S')}] "
                                  f"CHECKED: {self.total_checked:,} | "
                                  f"VALID: {len(self.valid_codes)} | "
+                                 f"RATE LIMITED: {self.rate_limited:,} | "
                                  f"SPEED: {speed:.0f}/s | "
                                  f"QUEUE: {code_queue.qsize():,}")
                         sys.stdout.write(status)
@@ -239,8 +265,9 @@ class NitroScanner:
     
     def start(self):
         self.start_time = time.time()
+        self.last_debug_time = self.start_time
 
-        requests.post(WEBHOOK_URL, json={"content": "✅ Nitro Scanner has started!"})
+        requests.post(WEBHOOK_URL, json={"content": "✅ **Nitro Scanner has started!**\nScanning for valid codes now..."})
         
         print("\n" + "="*70)
         print("     Nitro Scanner v1.0")
@@ -298,13 +325,14 @@ class NitroScanner:
             except KeyboardInterrupt:
                 print("\n\n[STOPPING] Saving results...")
                 self.running = False
-                requests.post(WEBHOOK_URL, json={"content": "🛑 Nitro Scanner has stopped!"})
+                requests.post(WEBHOOK_URL, json={"content": "🛑 **Nitro Scanner has stopped!**"})
         
         elapsed = time.time() - self.start_time
         print("\n" + "="*70)
         print("[FINAL STATISTICS]")
         print(f"Valid codes found: {len(self.valid_codes)}")
         print(f"Total codes checked: {self.total_checked:,}")
+        print(f"Rate limited: {self.rate_limited:,}")
         print(f"Average speed: {self.total_checked/elapsed:.0f} codes/sec")
         print(f"Total time: {elapsed:.1f} seconds")
         
@@ -325,7 +353,7 @@ class NitroScanner:
         else:
             print("\n[RESULT] No valid codes found during this session")
         
-        requests.post(WEBHOOK_URL, json={"content": "🛑 Nitro Scanner has stopped!"})
+        requests.post(WEBHOOK_URL, json={"content": "🛑 **Nitro Scanner has stopped!**"})
         self.save_valid_codes()
         
         print("\n" + "="*70)
