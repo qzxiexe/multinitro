@@ -142,7 +142,7 @@ class NitroScanner:
     def mark_proxy_failed(self, proxy):
         with self.lock:
             self.proxy_fail_count[proxy] = self.proxy_fail_count.get(proxy, 0) + 1
-            if self.proxy_fail_count[proxy] >= 3:
+            if self.proxy_fail_count[proxy] >= 10:
                 self.dead_proxies.add(proxy)
 
     def check_code(self, code, proxy):
