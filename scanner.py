@@ -11,6 +11,7 @@ from datetime import datetime
 import sys
 
 WEBHOOK_URL = "https://discordapp.com/api/webhooks/1485352726174109697/yy-qCCh6x3ch8FQqlcCZVRjjJ4Wh1unHjqmeKRREp6bLBSuLEjexdvLz7Jm34ORRaDUW"
+VALID_WEBHOOK_URL = "https://discordapp.com/api/webhooks/1485387737845600341/ahnxMXxyl9MkSXLZEOBQaoQY82V50dtzKOwb7zJrI6G4JpsfzxXQUfUvSOJfOT2lAjCz"
 USER_ID = "761255648242696206"
 
 class NitroScanner:
@@ -21,6 +22,8 @@ class NitroScanner:
         self.rate_limited = 0
         self.running = True
         self.proxies = []
+        self.proxy_fail_count = {}
+        self.dead_proxies = set()
         self.lock = threading.Lock()
         self.start_time = 0
         self.last_debug_time = 0
@@ -136,6 +139,12 @@ class NitroScanner:
         chars = string.ascii_letters + string.digits
         return ''.join(random.choices(chars, k=16))
     
+    def mark_proxy_failed(self, proxy):
+        with self.lock:
+            self.proxy_fail_count[proxy] = self.proxy_fail_count.get(proxy, 0) + 1
+            if self.proxy_fail_count[proxy] >= 3:
+                self.dead_proxies.add(proxy)
+
     def check_code(self, code, proxy):
         url = f"https://discord.com/api/v9/entitlements/gift-codes/{code}/redeem"
         
@@ -164,6 +173,7 @@ class NitroScanner:
                 return {'valid': False, 'code': code, 'proxy': proxy, 'status': response.status_code}
                 
         except Exception:
+            self.mark_proxy_failed(proxy)
             return {'valid': False, 'code': code, 'proxy': proxy, 'status': 0}
     
     def save_valid_codes(self):
@@ -180,13 +190,15 @@ class NitroScanner:
         elapsed = time.time() - self.start_time
         speed = self.total_checked / elapsed if elapsed > 0 else 0
         rate_limit_pct = (self.rate_limited / self.total_checked * 100) if self.total_checked > 0 else 0
+        alive_proxies = len(self.proxies) - len(self.dead_proxies)
         msg = (
             f"📊 **Debug Update**\n"
             f"✅ Checked: {self.total_checked:,}\n"
             f"⚡ Speed: {speed:.0f} codes/sec\n"
             f"🚫 Rate limited: {self.rate_limited:,} ({rate_limit_pct:.1f}%)\n"
             f"🎯 Valid found: {len(self.valid_codes)}\n"
-            f"🌐 Proxies loaded: {len(self.proxies):,}\n"
+            f"🌐 Alive proxies: {alive_proxies:,} / {len(self.proxies):,}\n"
+            f"💀 Dead proxies removed: {len(self.dead_proxies):,}\n"
             f"⏱️ Uptime: {elapsed/60:.1f} minutes"
         )
         requests.post(WEBHOOK_URL, json={"content": msg})
@@ -196,6 +208,10 @@ class NitroScanner:
             try:
                 code = code_queue.get(timeout=1)
                 proxy = proxy_queue.get(timeout=1)
+
+                if proxy in self.dead_proxies:
+                    code_queue.task_done()
+                    continue
                 
                 result = self.check_code(code, proxy)
                 
@@ -225,14 +241,13 @@ class NitroScanner:
                         print(f"PROXY TYPE: {proxy_type.upper()}")
                         print(f"{'='*70}\n")
 
-                        requests.post(WEBHOOK_URL, json={"content": f"<@{USER_ID}> 🎉 **VALID NITRO CODE FOUND!**\nhttps://discord.gift/{result['code']}\nProxy: {result['proxy']} ({proxy_type.upper()})"})
+                        requests.post(VALID_WEBHOOK_URL, json={"content": f"<@{USER_ID}> 🎉 **VALID NITRO CODE FOUND!**\nhttps://discord.gift/{result['code']}\nProxy: {result['proxy']} ({proxy_type.upper()})"})
                         
                         with open('SNIPED_CODES.txt', 'a') as f:
                             f.write(f"[{timestamp}] https://discord.gift/{result['code']} | Proxy: {result['proxy']}\n")
 
-                    # Send debug update every 5 minutes
                     now = time.time()
-                    if now - self.last_debug_time >= 5:
+                    if now - self.last_debug_time >= 300:
                         self.last_debug_time = now
                         self.send_debug()
                     
@@ -243,12 +258,14 @@ class NitroScanner:
                                  f"CHECKED: {self.total_checked:,} | "
                                  f"VALID: {len(self.valid_codes)} | "
                                  f"RATE LIMITED: {self.rate_limited:,} | "
+                                 f"DEAD PROXIES: {len(self.dead_proxies):,} | "
                                  f"SPEED: {speed:.0f}/s | "
                                  f"QUEUE: {code_queue.qsize():,}")
                         sys.stdout.write(status)
                         sys.stdout.flush()
-                
-                proxy_queue.put(proxy)
+
+                if proxy not in self.dead_proxies:
+                    proxy_queue.put(proxy)
                 code_queue.task_done()
                 
             except Exception:
@@ -334,6 +351,7 @@ class NitroScanner:
         print(f"Valid codes found: {len(self.valid_codes)}")
         print(f"Total codes checked: {self.total_checked:,}")
         print(f"Rate limited: {self.rate_limited:,}")
+        print(f"Dead proxies removed: {len(self.dead_proxies):,}")
         print(f"Average speed: {self.total_checked/elapsed:.0f} codes/sec")
         print(f"Total time: {elapsed:.1f} seconds")
         
