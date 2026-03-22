@@ -295,7 +295,7 @@ class NitroScanner:
             for proxy in self.proxies:
                 proxy_queue.put(proxy)
         
-        NUM_THREADS = 500
+        NUM_THREADS = 1000
         CODES_PER_SECOND = 8000
         
         print(f"\n[SETTINGS]")
