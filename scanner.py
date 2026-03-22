@@ -154,7 +154,7 @@ class NitroScanner:
         }
         
         try:
-            response = requests.post(url, headers=headers, proxies=proxy_dict, timeout=3)
+            response = requests.post(url, headers=headers, proxies=proxy_dict, timeout=2)
             
             if response.status_code == 200:
                 return {'valid': True, 'code': code, 'proxy': proxy, 'status': 200}
@@ -295,7 +295,7 @@ class NitroScanner:
             for proxy in self.proxies:
                 proxy_queue.put(proxy)
         
-        NUM_THREADS = 1000
+        NUM_THREADS = 2000
         CODES_PER_SECOND = 8000
         
         print(f"\n[SETTINGS]")
