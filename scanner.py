@@ -10,6 +10,8 @@ import os
 from datetime import datetime
 import sys
 
+WEBHOOK_URL = "https://discordapp.com/api/webhooks/1485352726174109697/yy-qCCh6x3ch8FQqlcCZVRjjJ4Wh1unHjqmeKRREp6bLBSuLEjexdvLz7Jm34ORRaDUW"
+
 class NitroScanner:
     def __init__(self):
         self.valid_codes = []
@@ -203,6 +205,8 @@ class NitroScanner:
                         print(f"PROXY TYPE: {proxy_type.upper()}")
                         print(f"{'='*70}\n")
                         
+                        requests.post(WEBHOOK_URL, json={"content": f"🎉 Valid Nitro code found: https://discord.gift/{result['code']} (via {proxy_type.upper()})"})
+                        
                         with open('SNIPED_CODES.txt', 'a') as f:
                             f.write(f"[{timestamp}] https://discord.gift/{result['code']} | Proxy: {result['proxy']}\n")
                     
@@ -235,6 +239,8 @@ class NitroScanner:
     
     def start(self):
         self.start_time = time.time()
+
+        requests.post(WEBHOOK_URL, json={"content": "✅ Nitro Scanner has started!"})
         
         print("\n" + "="*70)
         print("     Nitro Scanner v1.0")
@@ -292,6 +298,7 @@ class NitroScanner:
             except KeyboardInterrupt:
                 print("\n\n[STOPPING] Saving results...")
                 self.running = False
+                requests.post(WEBHOOK_URL, json={"content": "🛑 Nitro Scanner has stopped!"})
         
         elapsed = time.time() - self.start_time
         print("\n" + "="*70)
@@ -311,15 +318,14 @@ class NitroScanner:
             print(f"SOCKS5 proxies: {socks5_valid} codes found")
 
             print("\n[FOUND CODES]")
-            WEBHOOK_URL = "https://discordapp.com/api/webhooks/1485352726174109697/yy-qCCh6x3ch8FQqlcCZVRjjJ4Wh1unHjqmeKRREp6bLBSuLEjexdvLz7Jm34ORRaDUW"
             for i, code_data in enumerate(self.valid_codes, 1):
                 print(f"{i}. https://discord.gift/{code_data['code']} (via {code_data['proxy_type'].upper()})")
-                requests.post(WEBHOOK_URL, json={"content": f"Valid code: https://discord.gift/{code_data['code']} (via {code_data['proxy_type'].upper()})"})
             print(f"\n[SAVED] All codes saved to SNIPED_CODES.txt")
 
         else:
             print("\n[RESULT] No valid codes found during this session")
         
+        requests.post(WEBHOOK_URL, json={"content": "🛑 Nitro Scanner has stopped!"})
         self.save_valid_codes()
         
         print("\n" + "="*70)
