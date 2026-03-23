@@ -16,6 +16,7 @@ USER_ID = "761255648242696206"
 DEBUG_INTERVAL = 5        # seconds — change to 300 for 5 minutes
 DEAD_THRESHOLD = 25       # fails before a proxy is marked dead
 RELOAD_THRESHOLD = 1000   # reload fresh proxies when alive proxies drop below this
+RESTART_INTERVAL = 300   # restart every 30 minutes to refresh proxies
 
 class NitroScanner:
     def __init__(self):
@@ -139,11 +140,9 @@ class NitroScanner:
         try:
             new_proxies = self.fetch_proxies_online()
             with self.lock:
-                # Reset dead proxies and fail counts
                 self.dead_proxies = set()
                 self.proxy_fail_count = {}
                 self.proxies = new_proxies
-                # Refill the proxy queue
                 for proxy in new_proxies:
                     self.proxy_queue.put(proxy)
             print(f"[+] Reloaded {len(new_proxies)} proxies")
@@ -214,6 +213,7 @@ class NitroScanner:
                 speed = self.total_checked / elapsed if elapsed > 0 else 0
                 rate_limit_pct = (self.rate_limited / self.total_checked * 100) if self.total_checked > 0 else 0
                 alive_proxies = len(self.proxies) - len(self.dead_proxies)
+                time_until_restart = max(0, RESTART_INTERVAL - (time.time() - self.start_time))
                 msg = (
                     f"📊 **Debug Update**\n"
                     f"✅ Checked: {self.total_checked:,}\n"
@@ -222,11 +222,11 @@ class NitroScanner:
                     f"🎯 Valid found: {len(self.valid_codes)}\n"
                     f"🌐 Alive proxies: {alive_proxies:,} / {len(self.proxies):,}\n"
                     f"💀 Dead proxies removed: {len(self.dead_proxies):,}\n"
-                    f"⏱️ Uptime: {elapsed/60:.1f} minutes"
+                    f"⏱️ Uptime: {elapsed/60:.1f} minutes\n"
+                    f"🔄 Restart in: {time_until_restart/60:.1f} minutes"
                 )
                 requests.post(WEBHOOK_URL, json={"content": msg})
 
-                # Auto-reload if proxies running low
                 if alive_proxies < RELOAD_THRESHOLD and not self.reloading:
                     reload_thread = threading.Thread(target=self.reload_proxies, daemon=True)
                     reload_thread.start()
@@ -345,6 +345,7 @@ class NitroScanner:
         print(f"Proxy rotation: {'Enabled' if use_proxies else 'Disabled'}")
         print(f"Proxy types: HTTP, SOCKS4, SOCKS5")
         print(f"Auto-reload threshold: {RELOAD_THRESHOLD:,} alive proxies")
+        print(f"Auto-restart interval: {RESTART_INTERVAL//60} minutes")
         print(f"\n[OUTPUT]")
         print(f"Valid codes will appear here instantly")
         print(f"All found codes saved to: SNIPED_CODES.txt")
@@ -368,6 +369,11 @@ class NitroScanner:
                     time.sleep(0.1)
                     if not use_proxies and code_queue.qsize() > 50000:
                         time.sleep(0.5)
+                    if time.time() - self.start_time > RESTART_INTERVAL:
+                        print("\n[*] Restarting to refresh proxies...")
+                        requests.post(WEBHOOK_URL, json={"content": "🔄 **Restarting to refresh proxy pool...**"})
+                        self.running = False
+                        os.execv(sys.executable, [sys.executable] + sys.argv)
             except KeyboardInterrupt:
                 print("\n\n[STOPPING] Saving results...")
                 self.running = False
